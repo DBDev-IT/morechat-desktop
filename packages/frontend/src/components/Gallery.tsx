@@ -106,6 +106,7 @@ export default class Gallery extends Component<
     element: GalleryElement
     mediaMessageIds: number[]
     mediaLoadResult: Record<number, Type.MessageLoadResult>
+    deletedMessageIds: number[]
     loading: boolean
     queryText: string
     galleryImageKeepAspectRatio?: boolean
@@ -128,6 +129,7 @@ export default class Gallery extends Component<
       element: WebxdcAttachment,
       mediaMessageIds: [],
       mediaLoadResult: {},
+      deletedMessageIds: [],
       loading: true,
       queryText: '',
       galleryImageKeepAspectRatio: false,
@@ -143,6 +145,7 @@ export default class Gallery extends Component<
       element: WebxdcAttachment,
       mediaMessageIds: [],
       mediaLoadResult: {},
+      deletedMessageIds: [],
       loading: true,
       queryText: '',
     })
@@ -169,17 +172,21 @@ export default class Gallery extends Component<
           return
         }
 
-        // There is not really a point to also delete it from
-        // `mediaLoadResult` except for removing it from RAM, but let's do it.
         const newMediaLoadResult = { ...this.state.mediaLoadResult }
-        delete newMediaLoadResult[deletedMsgId]
+        const existing = newMediaLoadResult[deletedMsgId]
+        if (existing?.kind === 'message') {
+          newMediaLoadResult[deletedMsgId] = {
+            ...existing,
+            deleted: true,
+          } as Type.MessageLoadResult
+        }
 
-        this.setState({
-          mediaMessageIds: this.state.mediaMessageIds.filter(
-            id => id !== deletedMsgId
-          ),
+        this.setState(prevState => ({
           mediaLoadResult: newMediaLoadResult,
-        })
+          deletedMessageIds: prevState.deletedMessageIds.includes(deletedMsgId)
+            ? prevState.deletedMessageIds
+            : [...prevState.deletedMessageIds, deletedMsgId],
+        }))
       }
     )
     this.cleanup.push(toCleanup)
@@ -292,6 +299,7 @@ export default class Gallery extends Component<
     const {
       mediaMessageIds,
       mediaLoadResult,
+      deletedMessageIds,
       currentTab,
       loading,
       queryText,
@@ -392,6 +400,7 @@ export default class Gallery extends Component<
                         height={height}
                         mediaLoadResult={mediaLoadResult}
                         mediaMessageIds={filteredMediaMessageIds}
+                        deletedMessageIds={deletedMessageIds}
                         queryText={queryText}
                       ></FileTable>
                     </RovingTabindexProvider>
@@ -413,6 +422,7 @@ export default class Gallery extends Component<
                 element={this.state.element}
                 openFullscreenMedia={this.openFullscreenMedia.bind(this)}
                 mediaMessageIds={mediaMessageIds}
+                deletedMessageIds={deletedMessageIds}
                 galleryItemsRef={this.galleryItemsRef}
                 updateFirstVisibleMessage={this.updateFirstVisibleMessage.bind(
                   this
@@ -429,6 +439,7 @@ export default class Gallery extends Component<
 function GridGallery({
   currentTab,
   mediaMessageIds,
+  deletedMessageIds,
   galleryItemsRef,
   updateFirstVisibleMessage,
   element,
@@ -436,6 +447,7 @@ function GridGallery({
 }: {
   currentTab: MediaTabKey
   mediaMessageIds: number[]
+  deletedMessageIds: number[]
   galleryItemsRef: React.RefObject<HTMLDivElement | null>
   updateFirstVisibleMessage: (msg: T.MessageLoadResult) => void
   element: GalleryElement
@@ -563,6 +575,7 @@ function GridGallery({
                     messageCache,
                     openFullscreenMedia,
                     itemsPerRow,
+                    deletedMessageIds,
                   }}
                   itemKey={({ rowIndex, columnIndex, data }) =>
                     data.mediaMessageIds[rowIndex * itemsPerRow + columnIndex]
@@ -594,6 +607,7 @@ function GalleryGridCell({
     messageCache: Record<number, Type.MessageLoadResult | undefined>
     openFullscreenMedia: (message: Type.Message) => void
     itemsPerRow: number
+    deletedMessageIds: number[]
   }
 }) {
   const {
@@ -602,6 +616,7 @@ function GalleryGridCell({
     messageCache,
     openFullscreenMedia,
     itemsPerRow,
+    deletedMessageIds,
   } = data
 
   const msgId = mediaMessageIds[rowIndex * itemsPerRow + columnIndex]
@@ -616,6 +631,7 @@ function GalleryGridCell({
         messageId={msgId}
         loadResult={message}
         openFullscreenMedia={openFullscreenMedia}
+        deleted={deletedMessageIds.includes(msgId)}
       />
     </div>
   )
@@ -657,12 +673,14 @@ function FileTable({
   width,
   height,
   mediaMessageIds,
+  deletedMessageIds,
   mediaLoadResult,
   queryText,
 }: {
   width: number | string
   height: number
   mediaMessageIds: number[]
+  deletedMessageIds: number[]
   mediaLoadResult: Record<number, Type.MessageLoadResult>
   queryText: string
 }) {
@@ -678,6 +696,7 @@ function FileTable({
       overscanCount={10}
       itemData={{
         mediaMessageIds,
+        deletedMessageIds,
         mediaLoadResult,
         queryText,
       }}
@@ -698,11 +717,12 @@ function FileAttachmentRowWrapper({
   style: React.CSSProperties
   data: {
     mediaMessageIds: number[]
+    deletedMessageIds: number[]
     mediaLoadResult: Record<number, Type.MessageLoadResult>
     queryText: string
   }
 }) {
-  const { mediaMessageIds, mediaLoadResult, queryText } = data
+  const { mediaMessageIds, deletedMessageIds, mediaLoadResult, queryText } = data
   const msgId = mediaMessageIds[index]
   const message = mediaLoadResult[msgId]
   if (!message) {
@@ -713,6 +733,7 @@ function FileAttachmentRowWrapper({
       <FileAttachmentRow
         messageId={msgId}
         loadResult={message}
+        deleted={deletedMessageIds.includes(msgId)}
         queryText={queryText}
       />
     </li>

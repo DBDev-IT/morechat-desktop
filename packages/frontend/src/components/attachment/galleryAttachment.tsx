@@ -1,5 +1,6 @@
 import React, { useContext, useRef } from 'react'
 import { filesize } from 'filesize'
+import { C } from '@deltachat/jsonrpc-client'
 
 import {
   openAttachmentInShell,
@@ -160,14 +161,35 @@ function squareBrokenMediaContent() {
   )
 }
 
+function renderDeletedBadge(isDeleted: boolean) {
+  if (!isDeleted) {
+    return null
+  }
+  const tx = window.static_translate
+  return <div className='gallery-attachment-deleted-badge'>{tx('deleted')}</div>
+}
+
+function isDeletedMessage(
+  loadResult: T.MessageLoadResult,
+  deleted?: boolean
+): boolean {
+  return (
+    Boolean(deleted) &&
+    loadResult.kind === 'message' &&
+    loadResult.sender?.id !== C.DC_CONTACT_ID_SELF
+  )
+}
+
 export type GalleryAttachmentElementProps = {
   messageId: number
   loadResult: T.MessageLoadResult
+  deleted?: boolean
 }
 
 export function ImageAttachment({
   messageId,
   loadResult,
+  deleted,
   openFullscreenMedia,
 }: GalleryAttachmentElementProps & {
   openFullscreenMedia: (message: T.Message) => void
@@ -220,14 +242,15 @@ export function ImageAttachment({
     )
     const { file } = message
     const isBroken = !file
+    const isDeleted = isDeletedMessage(message, deleted)
 
     return (
       <button
         type='button'
         ref={interactiveElRef}
-        className={`media-attachment-media${isBroken ? ` broken` : ''} ${
-          rovingTabindex.className
-        }`}
+        className={`media-attachment-media${isBroken ? ` broken` : ''}${
+          isDeleted ? ' deleted' : ''
+        } ${rovingTabindex.className}`}
         onClick={
           isBroken ? openInShell : openFullscreenMedia.bind(null, message)
         }
@@ -242,11 +265,14 @@ export function ImageAttachment({
         {isBroken ? (
           squareBrokenMediaContent()
         ) : (
-          <img
-            className='attachment-content'
-            src={runtime.transformBlobURL(file)}
-            loading='lazy'
-          />
+          <>
+            <img
+              className='attachment-content'
+              src={runtime.transformBlobURL(file)}
+              loading='lazy'
+            />
+            {renderDeletedBadge(isDeleted)}
+          </>
         )}
       </button>
     )
@@ -256,6 +282,7 @@ export function ImageAttachment({
 export function VideoAttachment({
   messageId,
   loadResult,
+  deleted,
   openFullscreenMedia,
 }: GalleryAttachmentElementProps & {
   openFullscreenMedia: (message: T.Message) => void
@@ -306,13 +333,14 @@ export function VideoAttachment({
     const { file } = message
     const hasSupportedFormat = message.viewType === 'Video'
     const isBroken = !file || !hasSupportedFormat
+    const isDeleted = isDeletedMessage(message, deleted)
     return (
       <button
         type='button'
         ref={interactiveElRef}
-        className={`media-attachment-media${isBroken ? ` broken` : ''} ${
-          rovingTabindex.className
-        }`}
+        className={`media-attachment-media${isBroken ? ` broken` : ''}${
+          isDeleted ? ' deleted' : ''
+        } ${rovingTabindex.className}`}
         onClick={
           isBroken ? openInShell : openFullscreenMedia.bind(null, message)
         }
@@ -332,6 +360,7 @@ export function VideoAttachment({
             <div className='video-play-btn'>
               <div className='video-play-btn-icon' />
             </div>
+            {renderDeletedBadge(isDeleted)}
           </>
         )}
       </button>
@@ -343,6 +372,7 @@ export function VideoAttachment({
 export function AudioAttachment({
   messageId,
   loadResult,
+  deleted,
 }: GalleryAttachmentElementProps) {
   const { openDialog } = useDialog()
   const nextVoiceMessagePlayerCtx = useContext(NextVoiceMessagePlayerContext)
@@ -394,12 +424,13 @@ export function AudioAttachment({
     const { file } = message
     const src = runtime.transformBlobURL(file || '')
     const isBroken = !file
+    const isDeleted = isDeletedMessage(message, deleted)
     return (
       <div
         ref={interactiveElRef}
-        className={`media-attachment-audio${isBroken ? ` broken` : ''} ${
-          rovingTabindex.className
-        }`}
+        className={`media-attachment-audio${isBroken ? ` broken` : ''}${
+          isDeleted ? ' deleted' : ''
+        } ${rovingTabindex.className}`}
         onContextMenu={openContextMenu}
         aria-haspopup='menu'
         onKeyDown={e => {
@@ -446,20 +477,23 @@ export function AudioAttachment({
         {isBroken ? (
           squareBrokenMediaContent()
         ) : (
-          <AudioPlayer
-            src={src}
-            // Despite the element having multiple interactive
-            // (pseudo?) elements inside of it, tabindex applies to all of them.
-            tabIndex={rovingTabindex.tabIndex}
-            onPlayNonProgrammatic={() =>
-              nextVoiceMessagePlayerCtx.setCurrMessage({
-                accountId,
-                chatId: message.chatId,
-                messageId: message.id,
-                src,
-              })
-            }
-          />
+          <>
+            <AudioPlayer
+              src={src}
+              // Despite the element having multiple interactive
+              // (pseudo?) elements inside of it, tabindex applies to all of them.
+              tabIndex={rovingTabindex.tabIndex}
+              onPlayNonProgrammatic={() =>
+                nextVoiceMessagePlayerCtx.setCurrMessage({
+                  accountId,
+                  chatId: message.chatId,
+                  messageId: message.id,
+                  src,
+                })
+              }
+            />
+            {renderDeletedBadge(isDeleted)}
+          </>
         )}
       </div>
     )
@@ -469,6 +503,7 @@ export function AudioAttachment({
 export function FileAttachmentRow({
   messageId,
   loadResult,
+  deleted,
   queryText,
 }: GalleryAttachmentElementProps & { queryText?: string }) {
   const { openDialog } = useDialog()
@@ -526,11 +561,14 @@ export function FileAttachmentRow({
     const { fileName, fileBytes, fileMime, file, timestamp } = message
 
     const extension = getExtension(message)
+    const isDeleted = isDeletedMessage(message, deleted)
     return (
       <button
         type='button'
         ref={interactiveElRef}
-        className={'media-attachment-generic ' + rovingTabindex.className}
+        className={`media-attachment-generic${isDeleted ? ' deleted' : ''} ${
+          rovingTabindex.className
+        }`}
         onClick={ev => {
           ev.stopPropagation()
           openInShell()
@@ -567,6 +605,7 @@ export function FileAttachmentRow({
             extended={false}
           />
         </div>
+        {renderDeletedBadge(isDeleted)}
       </button>
     )
   }
@@ -597,6 +636,7 @@ const highlightQuery = (msg: string, query: string) => {
 export function WebxdcAttachment({
   messageId,
   loadResult,
+  deleted,
 }: GalleryAttachmentElementProps) {
   const { openDialog } = useDialog()
   const contextMenu = useContext(ContextMenuContext)
@@ -692,11 +732,14 @@ export function WebxdcAttachment({
       accountId
     )
     const { summary, name, document } = webxdcInfo
+    const isDeleted = isDeletedMessage(loadResult, deleted)
     return (
       <button
         type='button'
         ref={interactiveElRef}
-        className={'media-attachment-webxdc ' + rovingTabindex.className}
+        className={`media-attachment-webxdc${isDeleted ? ' deleted' : ''} ${
+          rovingTabindex.className
+        }`}
         onContextMenu={openContextMenu}
         aria-haspopup='menu'
         onClick={openWebxdc.bind(null, loadResult, webxdcInfo ?? undefined)}
@@ -716,6 +759,7 @@ export function WebxdcAttachment({
           </div>
           <div className='summary'>{summary}</div>
         </div>
+        {renderDeletedBadge(isDeleted)}
       </button>
     )
   }

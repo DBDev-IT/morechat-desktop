@@ -52,6 +52,30 @@
   }
 }
 
+.media-attachment-media.deleted,
+.media-attachment-audio.deleted,
+.media-attachment-generic.deleted,
+.media-attachment-webxdc.deleted {
+  filter: brightness(0.75);
+  opacity: 0.9;
+}
+
+.gallery-attachment-deleted-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background-color: rgba(0, 0, 0, 0.55);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
 .media-attachment-media.broken > .attachment-content {
   font-size: 22px;
   padding: 10px;
@@ -64,6 +88,7 @@
   margin: 2px;
   padding: 4px;
   background-color: rgba(130, 130, 130, 0.08);
+  position: relative;
   & > .heading {
     & > .name {
       font-size: 17px;
@@ -203,6 +228,7 @@
 
   display: flex;
   flex-direction: row;
+  position: relative;
   margin: 3.5px 3px;
 
   &:hover {

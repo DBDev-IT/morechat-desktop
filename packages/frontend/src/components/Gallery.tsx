@@ -722,7 +722,8 @@ function FileAttachmentRowWrapper({
     queryText: string
   }
 }) {
-  const { mediaMessageIds, deletedMessageIds, mediaLoadResult, queryText } = data
+  const { mediaMessageIds, deletedMessageIds, mediaLoadResult, queryText } =
+    data
   const msgId = mediaMessageIds[index]
   const message = mediaLoadResult[msgId]
   if (!message) {

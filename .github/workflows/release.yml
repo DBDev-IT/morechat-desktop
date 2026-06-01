@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create_release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create GitHub release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_release:
+    needs: create_release
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app
+        run: |
+          cd packages/target-electron
+          pnpm build
+          pnpm run pack:generate_config
+          pnpm run pack:patch-node-modules
+
+      - name: Prepare macOS packaging
+        if: runner.os == 'macOS'
+        run: |
+          cd packages/target-electron
+          echo "module.exports=()=>Promise.resolve()" > stub.cjs
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          pnpm i dmg-license
+
+      - name: Package on Linux
+        if: runner.os == 'Linux'
+        run: |
+          cd packages/target-electron
+          pnpm electron-builder --publish never --linux AppImage deb
+
+      - name: Package on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cd packages/target-electron
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          pnpm electron-builder --publish never --mac dmg --config.afterSign="stub.cjs" --universal
+
+      - name: Package on Windows
+        if: runner.os == 'Windows'
+        run: |
+          cd packages/target-electron
+          pnpm electron-builder --publish never --win portable --config.artifactName="deltachat-desktop.${{ github.ref_name }}.portable.exe"
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd packages/target-electron/dist
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            for file in *.AppImage *.deb; do
+              [ -e "$file" ] || continue
+              gh release upload "${{ github.ref_name }}" "$file" --clobber
+            done
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            for file in *.dmg; do
+              [ -e "$file" ] || continue
+              gh release upload "${{ github.ref_name }}" "$file" --clobber
+            done
+          fi
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            pwsh -Command "Get-ChildItem -Path . -Filter *.exe | ForEach-Object { gh release upload '${{ github.ref_name }}' $_.FullName --clobber }"
+        shell: bash

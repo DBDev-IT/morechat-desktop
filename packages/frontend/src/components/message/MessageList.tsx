@@ -108,6 +108,7 @@ export default function MessageList({
     viewState,
     jumpToMessageStack,
     loaded,
+    deletedMessageIds,
   } = messageListState
   const { hideReactionsBar, isReactionsBarShown } = useReactionsBar()
 
@@ -680,6 +681,7 @@ export default function MessageList({
         messageListItems={messageListItems}
         activeView={activeView}
         messageCache={messageCache}
+        deletedMessageIds={deletedMessageIds}
         messageListRef={messageListRef}
         chat={chat}
         loaded={loaded}
@@ -721,6 +723,7 @@ export const MessageListInner = React.memo(
     messageListItems: T.MessageListItem[]
     activeView: T.MessageListItem[]
     messageCache: { [msgId: number]: T.MessageLoadResult | undefined }
+    deletedMessageIds: number[]
     messageListRef: React.RefObject<HTMLDivElement | null>
     chat: T.FullChat
     loaded: boolean
@@ -736,6 +739,7 @@ export const MessageListInner = React.memo(
       messageListItems,
       messageCache,
       activeView,
+      deletedMessageIds,
       messageListRef,
       chat,
       loaded,
@@ -898,8 +902,11 @@ export const MessageListInner = React.memo(
                       unreadMessageInViewIntersectionObserver={
                         unreadMessageInViewIntersectionObserver
                       }
+                      deleted={deletedMessageIds.includes(messageId.msg_id)}
                     />
                   )
+                } else if (deletedMessageIds.includes(messageId.msg_id)) {
+                  return <DeletedMessagePlaceholder messageId={messageId} />
                 } else if (message?.kind === 'loadingError') {
                   return (
                     <MessageLoadingError
@@ -926,6 +933,7 @@ export const MessageListInner = React.memo(
       prevProps.messageCache === nextProps.messageCache &&
       prevProps.oldestFetchedMessageIndex ===
         nextProps.oldestFetchedMessageIndex &&
+      prevProps.deletedMessageIds === nextProps.deletedMessageIds &&
       prevProps.onScroll === nextProps.onScroll &&
       prevProps.onWheel === nextProps.onWheel
     return areEqual
@@ -973,13 +981,40 @@ function MessageLoading({
         ref={ref}
         className={'bubble ' + rovingTabindex.className}
         style={{
-          backgroundColor: 'rgba(55,0,0,0.5)',
+          backgroundColor: 'rgba(55,0,0.5)',
         }}
         tabIndex={rovingTabindex.tabIndex}
         onKeyDown={rovingTabindex.onKeydown}
         onFocus={rovingTabindex.setAsActiveElement}
       >
         Loading Message {messageId.msg_id}
+      </div>
+    </div>
+  )
+}
+
+function DeletedMessagePlaceholder({
+  messageId,
+}: {
+  messageId: T.MessageListItem & { kind: 'message' }
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const rovingTabindex = useRovingTabindex(ref)
+  const tx = useTranslationFunction()
+
+  return (
+    <div className='info-message' id={String(messageId.msg_id)}>
+      <div
+        ref={ref}
+        className={'bubble ' + rovingTabindex.className}
+        style={{
+          backgroundColor: 'rgba(55,0,0,0.5)',
+        }}
+        tabIndex={rovingTabindex.tabIndex}
+        onKeyDown={rovingTabindex.onKeydown}
+        onFocus={rovingTabindex.setAsActiveElement}
+      >
+        {tx('deleted')}
       </div>
     </div>
   )

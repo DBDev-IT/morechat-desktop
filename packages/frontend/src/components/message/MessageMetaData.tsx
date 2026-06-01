@@ -4,6 +4,7 @@ import { T } from '@deltachat/jsonrpc-client'
 
 import Timestamp from '../conversations/Timestamp'
 import { isImage } from '../attachment/Attachment'
+import styles from './styles.module.scss'
 import { msgStatus } from '../../types-app'
 import useTranslationFunction from '../../hooks/useTranslationFunction'
 import { useRpcFetch } from '../../hooks/useFetch'
@@ -29,6 +30,7 @@ type Props = {
   viewType: T.Viewtype
   chatType: T.ChatType
   isSavedMessage: boolean
+  isDeleted?: boolean
 }
 
 export default function MessageMetaData(props: Props) {
@@ -93,6 +95,9 @@ export default function MessageMetaData(props: Props) {
         direction={direction}
         module='date'
       />
+      {props.isDeleted && (
+        <span className={styles.deletedMessageTag}>{tx('deleted')}</span>
+      )}
       <span className='spacer' />
 
       {chatType === 'OutBroadcast' &&

@@ -29,6 +29,7 @@
     <string name="join_channel">Join Channel</string>
     <string name="rejoin">Rejoin</string>
     <string name="delete">Delete</string>
+    <string name="deleted">Deleted</string>
     <string name="delete_for_me">Delete for Me</string>
     <string name="delete_for_everyone">Delete for Everyone</string>
     <string name="info">Info</string>

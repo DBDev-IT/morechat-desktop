@@ -455,6 +455,7 @@ export default function Message(props: {
   chat: T.FullChat
   message: T.Message
   conversationType: ConversationType
+  deleted?: boolean
 }) {
   const { message, conversationType, chat } = props
   const { viewType, text, hasLocation, hasHtml } = message
@@ -885,6 +886,7 @@ export default function Message(props: {
         isWithoutText && viewType === 'Video' ? 'video-only' : '',
         {
           [styles.withReactions]: message.reactions,
+          [styles.deleted]: props.deleted,
           'type-sticker': viewType === 'Sticker',
           error: status === 'error',
           forwarded: message.isForwarded,
@@ -997,6 +999,7 @@ export default function Message(props: {
               timestamp={message.timestamp * 1000}
               encrypted={message.showPadlock}
               isSavedMessage={isOrHasSavedMessage}
+              isDeleted={props.deleted}
               onClickError={() =>
                 openDialog(AlertDialog, {
                   message: message.error

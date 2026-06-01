@@ -181,12 +181,25 @@ export default class Gallery extends Component<
           } as Type.MessageLoadResult
         }
 
-        this.setState(prevState => ({
-          mediaLoadResult: newMediaLoadResult,
-          deletedMessageIds: prevState.deletedMessageIds.includes(deletedMsgId)
+        this.setState(prevState => {
+          const deletedMessageIds = prevState.deletedMessageIds.includes(
+            deletedMsgId
+          )
             ? prevState.deletedMessageIds
-            : [...prevState.deletedMessageIds, deletedMsgId],
-        }))
+            : [...prevState.deletedMessageIds, deletedMsgId]
+
+          const mediaMessageIds = prevState.mediaMessageIds.includes(
+            deletedMsgId
+          )
+            ? prevState.mediaMessageIds
+            : [deletedMsgId, ...prevState.mediaMessageIds]
+
+          return {
+            mediaLoadResult: newMediaLoadResult,
+            deletedMessageIds,
+            mediaMessageIds,
+          }
+        })
       }
     )
     this.cleanup.push(toCleanup)
@@ -423,6 +436,7 @@ export default class Gallery extends Component<
                 openFullscreenMedia={this.openFullscreenMedia.bind(this)}
                 mediaMessageIds={mediaMessageIds}
                 deletedMessageIds={deletedMessageIds}
+                mediaLoadResult={mediaLoadResult}
                 galleryItemsRef={this.galleryItemsRef}
                 updateFirstVisibleMessage={this.updateFirstVisibleMessage.bind(
                   this
@@ -444,6 +458,7 @@ function GridGallery({
   updateFirstVisibleMessage,
   element,
   openFullscreenMedia,
+  mediaLoadResult,
 }: {
   currentTab: MediaTabKey
   mediaMessageIds: number[]
@@ -452,6 +467,7 @@ function GridGallery({
   updateFirstVisibleMessage: (msg: T.MessageLoadResult) => void
   element: GalleryElement
   openFullscreenMedia: (message: Type.Message) => void
+  mediaLoadResult: Record<number, T.MessageLoadResult>
 }): React.ReactNode {
   const accountId = selectedAccountId()
 
@@ -576,6 +592,7 @@ function GridGallery({
                     openFullscreenMedia,
                     itemsPerRow,
                     deletedMessageIds,
+                    mediaLoadResult,
                   }}
                   itemKey={({ rowIndex, columnIndex, data }) =>
                     data.mediaMessageIds[rowIndex * itemsPerRow + columnIndex]
@@ -608,6 +625,7 @@ function GalleryGridCell({
     openFullscreenMedia: (message: Type.Message) => void
     itemsPerRow: number
     deletedMessageIds: number[]
+    mediaLoadResult: Record<number, T.MessageLoadResult>
   }
 }) {
   const {
@@ -617,10 +635,11 @@ function GalleryGridCell({
     openFullscreenMedia,
     itemsPerRow,
     deletedMessageIds,
+    mediaLoadResult,
   } = data
 
   const msgId = mediaMessageIds[rowIndex * itemsPerRow + columnIndex]
-  const message = messageCache[msgId]
+  const message = messageCache[msgId] || mediaLoadResult[msgId]
   if (!message) {
     // todo skeleton item (for each mode a fitting shape: image, video, audio, webxdc)
     return null

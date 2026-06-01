@@ -21,6 +21,121 @@ const log = getLogger('messagelist')
 
 const PAGE_SIZE = 11
 
+const globallyDeletedMessageIds = new Set<number>()
+const globallyDeletedMessages: { [msgId: number]: T.Message } = {}
+
+function shouldPreserveDeletedMessage(message: T.Message): boolean {
+  return message.fromId !== C.DC_CONTACT_ID_SELF
+}
+
+function getDeletedMessageIdsForMessageList(
+  messageListItems: T.MessageListItem[],
+  existingDeletedMessageIds: number[],
+  chatId: number
+): number[] {
+  const messageIds = new Set(existingDeletedMessageIds)
+  for (const item of messageListItems) {
+    if (item.kind === 'message' && globallyDeletedMessageIds.has(item.msg_id)) {
+      messageIds.add(item.msg_id)
+    }
+  }
+
+  for (const deletedMessageId of globallyDeletedMessageIds) {
+    if (messageIds.has(deletedMessageId)) {
+      continue
+    }
+    const deletedMessage = globallyDeletedMessages[deletedMessageId]
+    if (deletedMessage?.chatId === chatId && shouldPreserveDeletedMessage(deletedMessage)) {
+      messageIds.add(deletedMessageId)
+    }
+  }
+  return Array.from(messageIds)
+}
+
+function getMessageTimestampForListItem(
+  item: T.MessageListItem,
+  messageCache: MessageListState['messageCache']
+): number {
+  if (item.kind !== 'message') {
+    return Number.POSITIVE_INFINITY
+  }
+  const cachedMessage = messageCache[item.msg_id]
+  if (cachedMessage?.kind === 'message') {
+    return cachedMessage.timestamp
+  }
+  const deletedMessage = globallyDeletedMessages[item.msg_id]
+  return deletedMessage?.timestamp ?? item.msg_id
+}
+
+function restoreDeletedMessageListItems(
+  newItems: T.MessageListItem[],
+  deletedMessageIds: number[],
+  oldItems: T.MessageListItem[],
+  chatId: number,
+  messageCache: MessageListState['messageCache']
+): T.MessageListItem[] {
+  const result = preserveDeletedMessageListItems(oldItems, newItems, deletedMessageIds)
+  const existingMessageIds = new Set(
+    result
+      .filter(
+        (item): item is Extract<T.MessageListItem, { kind: 'message' }> =>
+          item.kind === 'message'
+      )
+      .map(item => item.msg_id)
+  )
+
+  const missingDeletedMessageItems = deletedMessageIds
+    .filter(id => !existingMessageIds.has(id))
+    .map(id => ({ kind: 'message', msg_id: id } as T.MessageListItem))
+
+  if (missingDeletedMessageItems.length === 0) {
+    return result
+  }
+
+  const merged = [...result]
+  for (const missingItem of missingDeletedMessageItems) {
+    const missingTimestamp = getMessageTimestampForListItem(missingItem, messageCache)
+    const insertIndex = merged.findIndex(existing => {
+      if (existing.kind !== 'message') {
+        return false
+      }
+      return getMessageTimestampForListItem(existing, messageCache) > missingTimestamp
+    })
+    if (insertIndex === -1) {
+      merged.push(missingItem)
+    } else {
+      merged.splice(insertIndex, 0, missingItem)
+    }
+  }
+  return merged
+}
+
+function mergeMessageCachePreservingDeleted(
+  previousCache: MessageListState['messageCache'],
+  newMessageCacheItems: MessageListState['messageCache'],
+  deletedMessageIds: number[]
+): MessageListState['messageCache'] {
+  const merged: MessageListState['messageCache'] = {
+    ...previousCache,
+    ...newMessageCacheItems,
+  }
+  for (const id of deletedMessageIds) {
+    const previousItem = previousCache[id]
+    if (previousItem?.kind === 'message') {
+      merged[id] = previousItem
+      continue
+    }
+    const globalMessage = globallyDeletedMessages[id]
+    if (globalMessage) {
+      merged[id] = {
+        kind: 'message',
+        ...globalMessage,
+      }
+    }
+  }
+  return merged
+}
+
 interface MessageListState {
   // chat: Type.FullChat | null
   messageListItems: T.MessageListItem[]
@@ -30,6 +145,7 @@ interface MessageListState {
    * in case it doesn't.
    */
   messageCache: { [msgId: number]: T.MessageLoadResult | undefined }
+  deletedMessageIds: number[]
   /**
    * @see {@linkcode oldestFetchedMessageListItemIndex}
    */
@@ -67,6 +183,7 @@ const defaultState = () =>
     messageCache: {},
     newestFetchedMessageListItemIndex: -1,
     oldestFetchedMessageListItemIndex: -1,
+    deletedMessageIds: [],
     viewState: defaultChatViewState(),
     jumpToMessageStack: [],
     loaded: false,
@@ -155,6 +272,16 @@ export function useMessageList(
 
         store.effect.onEventMessagesChanged(msgId)
       }),
+      onDCEvent(accountId, 'MsgDeleted', ({ chatId: eventChatId, msgId }) => {
+        if (chatId !== eventChatId) {
+          return
+        }
+        if (msgId === 0) {
+          return
+        }
+
+        store.effect.onEventMessageDeleted(msgId)
+      }),
       onDCEvent(
         accountId,
         'ReactionsChanged',
@@ -217,6 +344,36 @@ function getView<T>(items: T[], start: number, end: number): T[] {
   return items.slice(start, end + 1)
 }
 
+function preserveDeletedMessageListItems(
+  oldItems: T.MessageListItem[],
+  newItems: T.MessageListItem[],
+  deletedMessageIds: number[]
+): T.MessageListItem[] {
+  const result = [...newItems]
+  const newMessageIds = new Set(
+    newItems
+      .filter(
+        (item): item is Extract<T.MessageListItem, { kind: 'message' }> =>
+          item.kind === 'message'
+      )
+      .map(item => item.msg_id)
+  )
+
+  oldItems.forEach((item, index) => {
+    if (
+      item.kind === 'message' &&
+      deletedMessageIds.includes(item.msg_id) &&
+      !newMessageIds.has(item.msg_id)
+    ) {
+      const insertIndex = Math.min(index, result.length)
+      result.splice(insertIndex, 0, item)
+      newMessageIds.add(item.msg_id)
+    }
+  })
+
+  return result
+}
+
 export class MessageListStore extends Store<MessageListState> {
   scheduler = new ChatStoreScheduler()
 
@@ -251,13 +408,16 @@ export class MessageListStore extends Store<MessageListState> {
       messageListItems: T.MessageListItem[],
       messageCache: MessageListState['messageCache'],
       newestFetchedMessageListItemIndex: number,
-      oldestFetchedMessageListItemIndex: number
+      oldestFetchedMessageListItemIndex: number,
+      deletedMessageIds?: number[]
     ) => {
       this.setState(state => {
         const modifiedState: MessageListState = {
           ...state,
           messageListItems,
           messageCache,
+          deletedMessageIds:
+            deletedMessageIds ?? state.deletedMessageIds,
           viewState: ChatViewReducer.refresh(state.viewState),
           newestFetchedMessageListItemIndex,
           oldestFetchedMessageListItemIndex,
@@ -283,10 +443,11 @@ export class MessageListStore extends Store<MessageListState> {
       this.setState(state => {
         const modifiedState: MessageListState = {
           ...state,
-          messageCache: {
-            ...state.messageCache,
-            ...payload.newMessageCacheItems,
-          },
+          messageCache: mergeMessageCachePreservingDeleted(
+            state.messageCache,
+            payload.newMessageCacheItems,
+            state.deletedMessageIds
+          ),
           oldestFetchedMessageListItemIndex:
             payload.oldestFetchedMessageListItemIndex,
           viewState: ChatViewReducer.appendMessagesTop(state.viewState),
@@ -301,10 +462,11 @@ export class MessageListStore extends Store<MessageListState> {
       this.setState(state => {
         const modifiedState: MessageListState = {
           ...state,
-          messageCache: {
-            ...state.messageCache,
-            ...payload.newMessageCacheItems,
-          },
+          messageCache: mergeMessageCachePreservingDeleted(
+            state.messageCache,
+            payload.newMessageCacheItems,
+            state.deletedMessageIds
+          ),
           newestFetchedMessageListItemIndex: payload.newestFetchedMessageIndex,
           viewState: ChatViewReducer.appendMessagesBottom(state.viewState),
         }
@@ -315,15 +477,41 @@ export class MessageListStore extends Store<MessageListState> {
       messageListItems: MessageListState['messageListItems']
       newestFetchedMessageIndex: number
       newMessageCacheItems: MessageListState['messageCache']
+      deletedMessageIds?: number[]
     }) => {
       this.setState(state => {
+        const deletedMessageIds = payload.deletedMessageIds
+          ? getDeletedMessageIdsForMessageList(
+              payload.messageListItems,
+              payload.deletedMessageIds,
+              this.chatId
+            )
+          : getDeletedMessageIdsForMessageList(
+              payload.messageListItems,
+              state.deletedMessageIds,
+              this.chatId
+            )
+
+        const mergedMessageCache = {
+          ...state.messageCache,
+          ...payload.newMessageCacheItems,
+        }
+
         const modifiedState: MessageListState = {
           ...state,
-          messageListItems: payload.messageListItems,
-          messageCache: {
-            ...state.messageCache,
-            ...payload.newMessageCacheItems,
-          },
+          messageListItems: restoreDeletedMessageListItems(
+            payload.messageListItems,
+            deletedMessageIds,
+            state.messageListItems,
+            this.chatId,
+            mergedMessageCache
+          ),
+          deletedMessageIds,
+          messageCache: mergeMessageCachePreservingDeleted(
+            state.messageCache,
+            payload.newMessageCacheItems,
+            deletedMessageIds
+          ),
           newestFetchedMessageListItemIndex: payload.newestFetchedMessageIndex,
           viewState: ChatViewReducer.fetchedIncomingMessages(state.viewState),
         }
@@ -342,6 +530,13 @@ export class MessageListStore extends Store<MessageListState> {
       }, 'unlockScroll')
     },
     messageChanged: (message: Type.Message) => {
+      if (
+        globallyDeletedMessageIds.has(message.id) &&
+        this.state.messageCache[message.id]?.kind === 'message'
+      ) {
+        return
+      }
+
       const messageLoadResult: Type.MessageLoadResult = {
         kind: 'message',
         ...message,
@@ -356,6 +551,45 @@ export class MessageListStore extends Store<MessageListState> {
         }
         return modifiedState
       }, 'messageChanged')
+    },
+    markMessageDeleted: (messageId: number, preserve?: boolean) => {
+      this.setState(state => {
+        if (preserve === false) {
+          const modifiedMessageCache = { ...state.messageCache }
+          delete modifiedMessageCache[messageId]
+          const modifiedState: MessageListState = {
+            ...state,
+            messageListItems: state.messageListItems.filter(
+              item => item.kind !== 'message' || item.msg_id !== messageId
+            ),
+            messageCache: modifiedMessageCache,
+            deletedMessageIds: state.deletedMessageIds.filter(id => id !== messageId),
+          }
+          globallyDeletedMessageIds.delete(messageId)
+          delete globallyDeletedMessages[messageId]
+          return modifiedState
+        }
+
+        if (state.deletedMessageIds.includes(messageId)) {
+          return state
+        }
+        const currentMessage = state.messageCache[messageId]
+        if (currentMessage?.kind === 'message') {
+          if (shouldPreserveDeletedMessage(currentMessage)) {
+            globallyDeletedMessages[messageId] = currentMessage
+            globallyDeletedMessageIds.add(messageId)
+          } else {
+            return state
+          }
+        } else {
+          globallyDeletedMessageIds.add(messageId)
+        }
+        const modifiedState: MessageListState = {
+          ...state,
+          deletedMessageIds: [...state.deletedMessageIds, messageId],
+        }
+        return modifiedState
+      }, 'markMessageDeleted')
     },
     setMessageState: (messageId: number, messageState: number) => {
       if (this.state.messageCache[messageId] == undefined) {
@@ -506,24 +740,43 @@ export class MessageListStore extends Store<MessageListState> {
           )
           newestFetchedMessageListItemIndex = messageListItems.length - 1
 
-          messageCache =
+          const loadedCache =
             (await loadMessages(
               this.accountId,
               messageListItems,
               oldestFetchedMessageListItemIndex,
               newestFetchedMessageListItemIndex
             ).catch(err => this.log.error('loadMessages failed', err))) || {}
+
+          const deletedMessageIds = getDeletedMessageIdsForMessageList(
+            messageListItems,
+            this.state.deletedMessageIds,
+            this.chatId
+          )
+
+          messageCache = mergeMessageCachePreservingDeleted(
+            this.state.messageCache,
+            loadedCache,
+            deletedMessageIds
+          )
+
+          this.reducer.selectedChat({
+            messageCache,
+            messageListItems: restoreDeletedMessageListItems(
+              messageListItems,
+              deletedMessageIds,
+              this.state.messageListItems,
+              this.chatId,
+              messageCache
+            ),
+            deletedMessageIds,
+            oldestFetchedMessageListItemIndex,
+            newestFetchedMessageListItemIndex,
+            viewState: ChatViewReducer.selectChat(this.state.viewState),
+          })
         }
 
         this.log.debug('loadChat took', performance.now() - startTime)
-
-        this.reducer.selectedChat({
-          messageCache,
-          messageListItems,
-          oldestFetchedMessageListItemIndex,
-          newestFetchedMessageListItemIndex,
-          viewState: ChatViewReducer.selectChat(this.state.viewState),
-        })
       },
       'selectChat'
     ),
@@ -540,31 +793,59 @@ export class MessageListStore extends Store<MessageListState> {
       this.scheduler.lockedQueuedEffect(
         'scroll',
         async () => {
-          const { messageCache } = this.state
-          const missing_message_ids: number[] = []
+          const { messageCache, deletedMessageIds } = this.state
+          const missingMessageIds: number[] = []
+          const preservedMessageCacheItems: MessageListState['messageCache'] = {}
+
           for (const item of this.activeView) {
-            if (item.kind === 'message' && !messageCache[item.msg_id]) {
-              missing_message_ids.push(item.msg_id)
+            if (item.kind !== 'message') {
+              continue
             }
+            if (messageCache[item.msg_id]) {
+              continue
+            }
+            if (globallyDeletedMessages[item.msg_id]) {
+              preservedMessageCacheItems[item.msg_id] = {
+                kind: 'message',
+                ...globallyDeletedMessages[item.msg_id],
+              }
+              continue
+            }
+            missingMessageIds.push(item.msg_id)
           }
-          if (missing_message_ids.length === 0) {
+
+          if (Object.keys(preservedMessageCacheItems).length > 0) {
+            this.setState(state => {
+              const modifiedState: MessageListState = {
+                ...state,
+                messageCache: {
+                  ...state.messageCache,
+                  ...preservedMessageCacheItems,
+                },
+              }
+              return modifiedState
+            }, 'loadMissingMessagesPreserve')
+          }
+
+          if (missingMessageIds.length === 0) {
             return
           }
           this.log.warn(
             'Message store cache misses messages, trying to load them now',
-            missing_message_ids
+            missingMessageIds
           )
           const newMessageCacheItems = await BackendRemote.rpc.getMessages(
             this.accountId,
-            missing_message_ids
+            missingMessageIds
           )
           this.setState(state => {
             const modifiedState: MessageListState = {
               ...state,
-              messageCache: {
-                ...state.messageCache,
-                ...newMessageCacheItems,
-              },
+              messageCache: mergeMessageCachePreservingDeleted(
+                state.messageCache,
+                newMessageCacheItems,
+                deletedMessageIds
+              ),
             }
             return modifiedState
           }, 'loadMissingMessagesAppend')
@@ -709,7 +990,7 @@ export class MessageListStore extends Store<MessageListState> {
             0
           )
 
-          const messageCache =
+          const loadedMessageCache =
             (await loadMessages(
               this.accountId,
               messageListItems,
@@ -717,11 +998,30 @@ export class MessageListStore extends Store<MessageListState> {
               newestFetchedMessageListItemIndex
             ).catch(err => this.log.error('loadMessages failed', err))) || {}
 
-          this.reducer.refresh(
+          const deletedMessageIds = getDeletedMessageIdsForMessageList(
             messageListItems,
+            this.state.deletedMessageIds,
+            this.chatId
+          )
+
+          const messageCache = mergeMessageCachePreservingDeleted(
+            this.state.messageCache,
+            loadedMessageCache,
+            deletedMessageIds
+          )
+
+          this.reducer.refresh(
+            restoreDeletedMessageListItems(
+              messageListItems,
+              deletedMessageIds,
+              this.state.messageListItems,
+              this.chatId,
+              messageCache
+            ),
             messageCache,
             newestFetchedMessageListItemIndex,
-            oldestFetchedMessageListItemIndex
+            oldestFetchedMessageListItemIndex,
+            deletedMessageIds
           )
           return true
         },
@@ -802,6 +1102,38 @@ export class MessageListStore extends Store<MessageListState> {
       },
       'onEventMessagesChanged'
     ),
+    onEventMessageDeleted: this.scheduler.queuedEffect(
+      async (messageId: number) => {
+        if (messageId <= C.DC_MSG_ID_LAST_SPECIAL) {
+          return
+        }
+
+        const currentMessage = this.state.messageCache[messageId]
+        if (currentMessage?.kind === 'message') {
+          this.reducer.markMessageDeleted(
+            messageId,
+            shouldPreserveDeletedMessage(currentMessage)
+          )
+          return
+        }
+
+        try {
+          const message = await BackendRemote.rpc.getMessage(
+            this.accountId,
+            messageId
+          )
+          if (shouldPreserveDeletedMessage(message)) {
+            this.reducer.markMessageDeleted(messageId, true)
+            this.reducer.messageChanged(message)
+          } else {
+            this.reducer.markMessageDeleted(messageId, false)
+          }
+        } catch (error) {
+          this.log.warn('failed to refresh deleted message', messageId, error)
+        }
+      },
+      'onEventMessageDeleted'
+    ),
   }
 
   /**
@@ -862,7 +1194,11 @@ export class MessageListStore extends Store<MessageListState> {
       ).catch(err => this.log.error('loadMessages failed', err))) || {}
 
     this.reducer.fetchedIncomingMessages({
-      messageListItems,
+      messageListItems: preserveDeletedMessageListItems(
+        this.state.messageListItems,
+        messageListItems,
+        this.state.deletedMessageIds
+      ),
       newMessageCacheItems,
       newestFetchedMessageIndex: indexEnd,
     })
